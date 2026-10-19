@@ -1,0 +1,223 @@
+// DistriLab A2 - every remote call between Bootstrap, Workers and Clients.
+// Replaces the A1 RMI interfaces: common.BootstrapService and common.WorkerService.
+syntax = "proto3";
+
+package distrilab;
+
+option java_multiple_files = true;
+option java_package = "distrilab.grpc";
+option java_outer_classname = "DistriLabProto";
+
+// =====================================================================
+// Shared messages
+// =====================================================================
+
+message Empty {}
+
+message Ack {
+  bool ok = 1;
+  string message = 2;
+}
+
+// Address of a worker. Replaces passing an RMI stub around:
+// whoever receives a WorkerInfo opens a gRPC channel to host:port.
+message WorkerInfo {
+  int32 id = 1;
+  string host = 2;
+  int32 port = 3;
+}
+
+message WorkerId {
+  int32 id = 1;
+}
+
+message WorkerList {
+  repeated WorkerInfo workers = 1;
+}
+
+// =====================================================================
+// Bootstrap Node  (A1: common.BootstrapService)
+// =====================================================================
+
+message RegisterRequest {
+  string host = 1;   // where this worker's gRPC server listens
+  int32 port = 2;
+}
+
+message RandomWorkersRequest {
+  int32 exclude_id = 1;
+  int32 count = 2;   // how many neighbours the joining worker wants
+}
+
+message CoordinatorUpdate {
+  int32 coordinator_id = 1;
+  int64 term = 2;    // increases with every election; old coordinators are ignored
+}
+
+message CoordinatorReply {
+  bool found = 1;    // false while an election is in progress
+  WorkerInfo coordinator = 2;
+  int64 term = 3;
+}
+
+service BootstrapService {
+  // Assigns a unique ID and records the worker as active.
+  rpc Register(RegisterRequest) returns (WorkerInfo);
+  rpc Unregister(WorkerId) returns (Ack);
+  // Random active workers to connect to, forming the unstructured network.
+  rpc GetRandomActiveWorkers(RandomWorkersRequest) returns (WorkerList);
+  rpc GetActiveWorkers(Empty) returns (WorkerList);
+  // Election winner records itself here so clients and new workers can find it.
+  rpc SetCoordinator(CoordinatorUpdate) returns (Ack);
+  rpc GetCoordinator(Empty) returns (CoordinatorReply);
+}
+
+// =====================================================================
+// Leader election  (A1: receiveElection / receiveCoordinator, echo algorithm)
+// =====================================================================
+
+// A worker's claim in an election. Lowest JAC wins; on a tie, highest ID wins.
+message Candidate {
+  int32 id = 1;
+  int32 jac = 2;
+}
+
+message ElectionMessage {
+  string election_id = 1;  // unique per election, used to ignore duplicates
+  int32 sender_id = 2;
+}
+
+message ElectionReply {
+  bool duplicate = 1;      // true = this worker already took part in this election
+  Candidate best = 2;      // best candidate in the replier's part of the network
+}
+
+message CoordinatorMessage {
+  string election_id = 1;
+  int32 coordinator_id = 2;
+  int64 term = 3;
+}
+
+service ElectionService {
+  // ELECTION: forwarded neighbour to neighbour; each reply carries the best candidate below it (echo).
+  rpc Election(ElectionMessage) returns (ElectionReply);
+  // COORDINATOR: winner announced, flooded neighbour to neighbour.
+  rpc Coordinator(CoordinatorMessage) returns (Ack);
+}
+
+// =====================================================================
+// Worker  (A1: ping, add/removeNeighbour, executeTask)
+// =====================================================================
+
+enum JobType {
+  MAX = 0;
+  PRIMESUM = 1;
+  PRIMECOUNT = 2;
+}
+
+// One part of a job, sent by the coordinator to one worker.
+message Task {
+  string task_id = 1;      // unique: <job_id>-<part number>; makes reassignment safe
+  string job_id = 2;
+  JobType type = 3;
+  repeated int64 numbers = 4;   // MAX, PRIMECOUNT
+  int64 start = 5;              // PRIMESUM
+  int64 end = 6;
+}
+
+// Streamed back while the task runs - real progress from the computation loop.
+message TaskProgress {
+  string task_id = 1;
+  int32 worker_id = 2;
+  int64 items_done = 3;
+  int64 items_total = 4;
+  bool finished = 5;
+  int64 result = 6;        // set when finished = true
+}
+
+enum TaskStatus {
+  PENDING = 0;    // not yet given to a worker (or taken back from a failed one)
+  ASSIGNED = 1;
+  DONE = 2;
+}
+
+// Coordinator's record of one task. Replicated so a new coordinator can continue.
+message TaskRecord {
+  Task task = 1;
+  TaskStatus status = 2;
+  int32 worker_id = 3;
+  int64 items_done = 4;
+  int64 result = 5;
+}
+
+message JobRecord {
+  string job_id = 1;
+  string client_id = 2;
+  JobType type = 3;
+  repeated TaskRecord tasks = 4;
+}
+
+// Everything that must survive a coordinator failure.
+message ClusterState {
+  int64 term = 1;
+  int32 coordinator_id = 2;
+  int64 version = 3;       // increases on every change; a worker keeps the newest
+  repeated JobRecord jobs = 4;
+}
+
+service WorkerService {
+  rpc Ping(Empty) returns (Ack);
+  rpc AddNeighbour(WorkerInfo) returns (Ack);
+  rpc RemoveNeighbour(WorkerId) returns (Ack);
+  rpc GetNeighbours(Empty) returns (WorkerList);
+  // Coordinator -> worker. The stream breaking = worker failed; silence + Ping OK = worker slow.
+  rpc ExecuteTask(Task) returns (stream TaskProgress);
+  // Coordinator -> every worker after each change, so any worker can take over.
+  rpc ReplicateState(ClusterState) returns (Ack);
+}
+
+// =====================================================================
+// Client <-> Coordinator  (A1: submitJob)
+// =====================================================================
+
+message JobRequest {
+  string job_id = 1;       // generated by the client (UUID) - resubmitting after failover is safe
+  string client_id = 2;
+  JobType type = 3;
+  repeated int64 numbers = 4;
+  int64 start = 5;
+  int64 end = 6;
+}
+
+message JobAccepted {
+  string job_id = 1;
+  int32 coordinator_id = 2;
+}
+
+message JobRef {
+  string job_id = 1;
+}
+
+message WorkerProgress {
+  int32 worker_id = 1;
+  string task_id = 2;
+  int64 items_done = 3;
+  int64 items_total = 4;
+  string status = 5;       // RUNNING, SLOW, DONE, REASSIGNED
+}
+
+message JobProgress {
+  string job_id = 1;
+  double percent = 2;               // overall %, from completed items across all workers
+  repeated WorkerProgress workers = 3;  // shown when the user clicks the progress bar
+  bool finished = 4;
+  int64 result = 5;
+  int32 coordinator_id = 6;
+}
+
+service JobService {
+  rpc SubmitJob(JobRequest) returns (JobAccepted);
+  // Server streaming: one update each time real work completes.
+  // After a coordinator failover the client calls this again on the new coordinator.
+  rpc WatchJob(JobRef) returns (stream JobProgress);
+}

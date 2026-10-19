@@ -1,8 +1,9 @@
-package common;
+package distrilab.common;
 
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 
+/** Timestamped console logging shared by all programs. */
 public final class Log {
     private static final DateTimeFormatter FMT = DateTimeFormatter.ofPattern("HH:mm:ss");
 

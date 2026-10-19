@@ -1,4 +1,7 @@
-build/
-dist/
-nbproject/private/
+target/
 *.class
+.idea/
+*.iml
+nbproject/private/
+.vscode/
+distrilab.properties

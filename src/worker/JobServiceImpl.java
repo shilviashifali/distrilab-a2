@@ -9,7 +9,10 @@ import io.grpc.Status;
 import io.grpc.stub.ServerCallStreamObserver;
 import io.grpc.stub.StreamObserver;
 
-/** gRPC endpoint clients use to submit jobs and watch their progress (server streaming). */
+/**
+ * gRPC endpoint clients use to submit jobs and watch their progress (server
+ * streaming).
+ */
 public class JobServiceImpl extends JobServiceGrpc.JobServiceImplBase {
 
     private final JobManager jobs;
@@ -22,7 +25,13 @@ public class JobServiceImpl extends JobServiceGrpc.JobServiceImplBase {
 
     @Override
     public void submitJob(JobRequest req, StreamObserver<JobAccepted> out) {
-        // Person 2: if this worker is not the coordinator, reply with Status.FAILED_PRECONDITION
+        if (!node.election().isCoordinator()) {
+            // The client should ask Bootstrap for the current coordinator and try again.
+            out.onError(Status.FAILED_PRECONDITION
+                    .withDescription("Not the coordinator (current coordinator: Worker-" + node.election().coordinatorId() + ")")
+                    .asRuntimeException());
+            return;
+        }
         try {
             String jobId = jobs.submit(req);
             out.onNext(JobAccepted.newBuilder().setJobId(jobId).setCoordinatorId(node.self().getId()).build());

@@ -1,6 +1,7 @@
 package worker;
 
 import grpc.Ack;
+import grpc.ClusterState;
 import grpc.Empty;
 import grpc.Task;
 import grpc.TaskProgress;
@@ -12,17 +13,17 @@ import io.grpc.stub.StreamObserver;
 
 /**
  * gRPC endpoint every worker exposes.
- * ReplicateState (Person 2) is added as an override in the marked section;
- * until then gRPC answers it with UNIMPLEMENTED.
  */
 public class WorkerServiceImpl extends WorkerServiceGrpc.WorkerServiceImplBase {
 
     private final NeighbourManager neighbours;
     private final TaskWorker taskWorker;
+    private final ElectionManager election;
 
-    public WorkerServiceImpl(NeighbourManager neighbours, TaskWorker taskWorker) {
+    public WorkerServiceImpl(NeighbourManager neighbours, TaskWorker taskWorker, ElectionManager election) {
         this.neighbours = neighbours;
         this.taskWorker = taskWorker;
+        this.election = election;
     }
 
     // ---------------- Network ----------------
@@ -60,5 +61,13 @@ public class WorkerServiceImpl extends WorkerServiceGrpc.WorkerServiceImplBase {
         taskWorker.execute(req, out);
     }
 
-    // ---------------- Replication (Person 2): override replicateState(ClusterState, StreamObserver<Ack>) here ----------------
+    // ---------------- Replication ----------------
+
+    /** The coordinator copies its job state here after every change, so any worker can take over. */
+    @Override
+    public void replicateState(ClusterState req, StreamObserver<Ack> out) {
+        election.receiveState(req);
+        out.onNext(Ack.newBuilder().setOk(true).build());
+        out.onCompleted();
+    }
 }

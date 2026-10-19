@@ -181,7 +181,7 @@ public class JobManager {
                         ts.assign(w);
                         busy.put(w.getId(), ts);
                         started.add(ts);
-                        // Person 2: election.recordAssignment(w.getId()) to update the JAC
+                         node.election().recordAssignment(w.getId()); // raises the coordinator's JAC
                         Log.info(name(), "Assigned task " + ts.id() + " to Worker-" + w.getId()
                                 + (ts.reassignments > 0 ? " (reassigned)" : ""));
                     }

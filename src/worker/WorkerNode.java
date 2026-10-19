@@ -42,6 +42,7 @@ public class WorkerNode {
     private final NeighbourManager neighbours;
     private final TaskWorker taskWorker;
     private final JobManager jobManager;
+    private final ElectionManager election;
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
     private final AtomicBoolean left = new AtomicBoolean(false);
 
@@ -65,6 +66,10 @@ public class WorkerNode {
         this.jobManager = new JobManager(this,
                 s.getInt("tasksPerWorker", Defaults.TASKS_PER_WORKER),
                 s.getInt("slowAfterSeconds", Defaults.SLOW_AFTER_SECONDS));
+        this.election = new ElectionManager(this,
+                s.getInt("missedPings", Defaults.MISSED_PINGS_FOR_FAILURE),
+                s.getInt("electionDelay", Defaults.ELECTION_DELAY_SECONDS),
+                timeoutMs);
     }
 
     // ------------------------------------------------------------------
@@ -74,9 +79,9 @@ public class WorkerNode {
     /** Starts the server first (so the Bootstrap can ping us), then registers and joins the network. */
     public void start() throws IOException {
         server = ServerBuilder.forPort(requestedPort)
-                .addService(new WorkerServiceImpl(neighbours, taskWorker))
+                .addService(new WorkerServiceImpl(neighbours, taskWorker, election))
                 .addService(new JobServiceImpl(jobManager, this))
-                // Person 2: .addService(new ElectionServiceImpl(...))
+                .addService(new ElectionServiceImpl(election))
                 .build()
                 .start();
         try {
@@ -93,7 +98,7 @@ public class WorkerNode {
         neighbours.connectToRandom();
         scheduler.scheduleAtFixedRate(neighbours::check, pingInterval, pingInterval, TimeUnit.SECONDS);
         jobManager.start();
-        // Person 2: schedule the coordinator check / election start here
+        scheduler.scheduleAtFixedRate(election::watchdog, pingInterval, pingInterval, TimeUnit.SECONDS);
     }
 
     public void leave() {
@@ -102,6 +107,7 @@ public class WorkerNode {
         }
         scheduler.shutdownNow();
         jobManager.stop();
+        election.stop();
         taskWorker.shutdown();
         neighbours.leave();
         try {
@@ -130,6 +136,10 @@ public class WorkerNode {
         return jobManager;
     }
 
+    public ElectionManager election() {
+        return election;
+    }
+
     public Channels channels() {
         return channels;
     }
@@ -150,7 +160,7 @@ public class WorkerNode {
     private static final String JOB_USAGE = "Usage: job PRIMESUM 1 20000000 | job MAX 4,8,15,16 | job PRIMECOUNT 2,3,4,5,7";
 
     private void consoleLoop() {
-        Log.info(name(), "Commands: n = neighbours, w = all workers, q = quit, job ... = submit a test job");
+        Log.info(name(), "Commands: e = start election, s = status, n = neighbours, w = all workers, q = quit, job ... = submit a test job");
         Log.info(name(), JOB_USAGE);
         Scanner in = new Scanner(System.in);
         while (in.hasNextLine()) {
@@ -166,14 +176,19 @@ public class WorkerNode {
                     leave();
                     System.exit(0);
                 }
-                // Person 2: "e" (start election) and "s" (coordinator, term, JAC)
+                case "e" -> new Thread(election::startElection, "manual-election").start();
+                case "s" -> Log.info(name(), election.status());
                 default -> { }
             }
         }
     }
 
-    /** Test helper until the client GUI exists: this worker acts as coordinator for the job. */
+    /** Test helper until the client GUI exists: only the coordinator accepts jobs. */
     private void submitFromConsole(String args) {
+        if (!election.isCoordinator()) {
+            Log.error(name(), "Not the coordinator - " + election.status() + ". Type the job in the coordinator's tab.");
+            return;
+        }
         try {
             String[] parts = args.split("\\s+", 2);
             JobType type = JobType.valueOf(parts[0].toUpperCase());

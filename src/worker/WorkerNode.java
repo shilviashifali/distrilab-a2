@@ -69,6 +69,7 @@ public class WorkerNode {
         this.election = new ElectionManager(this,
                 s.getInt("missedPings", Defaults.MISSED_PINGS_FOR_FAILURE),
                 s.getInt("electionDelay", Defaults.ELECTION_DELAY_SECONDS),
+                s.getInt("jobsPerTerm", Defaults.JOBS_PER_TERM),
                 timeoutMs);
     }
 
@@ -207,6 +208,8 @@ public class WorkerNode {
             jobManager.watch(jobId, new ConsoleProgress(name()));
         } catch (IllegalArgumentException | ArrayIndexOutOfBoundsException e) {
             Log.error(name(), "Invalid job (" + e.getMessage() + "). " + JOB_USAGE);
+        } catch (IllegalStateException e) {
+            Log.error(name(), e.getMessage());
         }
     }
 

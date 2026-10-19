@@ -1,16 +1,16 @@
-package distrilab.bootstrap;
+package bootstrap;
 
-import distrilab.common.Log;
-import distrilab.grpc.Ack;
-import distrilab.grpc.BootstrapServiceGrpc;
-import distrilab.grpc.CoordinatorReply;
-import distrilab.grpc.CoordinatorUpdate;
-import distrilab.grpc.Empty;
-import distrilab.grpc.RandomWorkersRequest;
-import distrilab.grpc.RegisterRequest;
-import distrilab.grpc.WorkerId;
-import distrilab.grpc.WorkerInfo;
-import distrilab.grpc.WorkerList;
+import common.Log;
+import grpc.Ack;
+import grpc.BootstrapServiceGrpc;
+import grpc.CoordinatorReply;
+import grpc.CoordinatorUpdate;
+import grpc.Empty;
+import grpc.RandomWorkersRequest;
+import grpc.RegisterRequest;
+import grpc.WorkerId;
+import grpc.WorkerInfo;
+import grpc.WorkerList;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 

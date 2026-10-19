@@ -1,4 +1,4 @@
-package distrilab.common;
+package common;
 
 /** Default values used when a setting is not given on the command line or in distrilab.properties. */
 public final class Defaults {

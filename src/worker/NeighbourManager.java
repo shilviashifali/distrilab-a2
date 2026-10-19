@@ -1,13 +1,13 @@
-package distrilab.worker;
+package worker;
 
-import distrilab.common.Channels;
-import distrilab.common.Log;
-import distrilab.grpc.BootstrapServiceGrpc;
-import distrilab.grpc.Empty;
-import distrilab.grpc.RandomWorkersRequest;
-import distrilab.grpc.WorkerId;
-import distrilab.grpc.WorkerInfo;
-import distrilab.grpc.WorkerServiceGrpc;
+import common.Channels;
+import common.Log;
+import grpc.BootstrapServiceGrpc;
+import grpc.Empty;
+import grpc.RandomWorkersRequest;
+import grpc.WorkerId;
+import grpc.WorkerInfo;
+import grpc.WorkerServiceGrpc;
 import io.grpc.StatusRuntimeException;
 import java.util.ArrayList;
 import java.util.List;

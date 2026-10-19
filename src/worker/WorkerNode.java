@@ -1,14 +1,14 @@
-package distrilab.worker;
+package worker;
 
-import distrilab.common.Channels;
-import distrilab.common.Defaults;
-import distrilab.common.Log;
-import distrilab.common.Settings;
-import distrilab.grpc.BootstrapServiceGrpc;
-import distrilab.grpc.Empty;
-import distrilab.grpc.RegisterRequest;
-import distrilab.grpc.WorkerId;
-import distrilab.grpc.WorkerInfo;
+import common.Channels;
+import common.Defaults;
+import common.Log;
+import common.Settings;
+import grpc.BootstrapServiceGrpc;
+import grpc.Empty;
+import grpc.RegisterRequest;
+import grpc.WorkerId;
+import grpc.WorkerInfo;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
 import io.grpc.StatusRuntimeException;

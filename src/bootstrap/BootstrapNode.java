@@ -1,9 +1,9 @@
-package distrilab.bootstrap;
+package bootstrap;
 
-import distrilab.common.Channels;
-import distrilab.common.Defaults;
-import distrilab.common.Log;
-import distrilab.common.Settings;
+import common.Channels;
+import common.Defaults;
+import common.Log;
+import common.Settings;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
 import java.io.IOException;

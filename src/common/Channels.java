@@ -1,4 +1,4 @@
-package distrilab.common;
+package common;
 
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;

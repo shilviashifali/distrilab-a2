@@ -1,10 +1,10 @@
-package distrilab.bootstrap;
+package bootstrap;
 
-import distrilab.common.Channels;
-import distrilab.common.Log;
-import distrilab.grpc.Empty;
-import distrilab.grpc.WorkerInfo;
-import distrilab.grpc.WorkerServiceGrpc;
+import common.Channels;
+import common.Log;
+import grpc.Empty;
+import grpc.WorkerInfo;
+import grpc.WorkerServiceGrpc;
 import io.grpc.StatusRuntimeException;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;

@@ -1,6 +1,6 @@
-package distrilab.bootstrap;
+package bootstrap;
 
-import distrilab.grpc.WorkerInfo;
+import grpc.WorkerInfo;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;

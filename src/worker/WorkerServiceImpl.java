@@ -1,11 +1,11 @@
-package distrilab.worker;
+package worker;
 
-import distrilab.grpc.Ack;
-import distrilab.grpc.Empty;
-import distrilab.grpc.WorkerId;
-import distrilab.grpc.WorkerInfo;
-import distrilab.grpc.WorkerList;
-import distrilab.grpc.WorkerServiceGrpc;
+import grpc.Ack;
+import grpc.Empty;
+import grpc.WorkerId;
+import grpc.WorkerInfo;
+import grpc.WorkerList;
+import grpc.WorkerServiceGrpc;
 import io.grpc.stub.StreamObserver;
 
 /**

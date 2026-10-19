@@ -1,4 +1,4 @@
-package distrilab.common;
+package common;
 
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;

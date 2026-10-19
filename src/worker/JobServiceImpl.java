@@ -9,10 +9,7 @@ import io.grpc.Status;
 import io.grpc.stub.ServerCallStreamObserver;
 import io.grpc.stub.StreamObserver;
 
-/**
- * gRPC endpoint clients use to submit jobs and watch their progress (server
- * streaming).
- */
+/** gRPC endpoint clients use to submit jobs and watch their progress (server streaming). */
 public class JobServiceImpl extends JobServiceGrpc.JobServiceImplBase {
 
     private final JobManager jobs;
@@ -38,6 +35,9 @@ public class JobServiceImpl extends JobServiceGrpc.JobServiceImplBase {
             out.onCompleted();
         } catch (IllegalArgumentException e) {
             out.onError(Status.INVALID_ARGUMENT.withDescription(e.getMessage()).asRuntimeException());
+        } catch (IllegalStateException e) {
+            // not the coordinator, or this coordinator's term is over: the client retries on the (new) coordinator
+            out.onError(Status.FAILED_PRECONDITION.withDescription(e.getMessage()).asRuntimeException());
         }
     }
 

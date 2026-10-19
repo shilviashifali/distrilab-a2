@@ -85,7 +85,7 @@ public class JobManager {
         }
     }
 
-    /** Person 2: set a callback that replicates {@link #snapshot} to the other workers after every change. */
+    /** The election manager sets a callback that replicates {@link #snapshot} to the other workers after every change. */
     public void setOnChange(Runnable onChange) {
         this.onChange = onChange;
     }
@@ -106,6 +106,7 @@ public class JobManager {
             if (jobs.containsKey(jobId)) {
                 return jobId; // same job resubmitted (e.g. after a coordinator change) - keep the existing one
             }
+            node.election().reserveJobSlot(); // only the coordinator accepts jobs, jobsPerTerm per term
             List<Task> tasks = job.split(jobId, request, workers * tasksPerWorker);
             jobs.put(jobId, new JobState(jobId, request.getClientId(), job, job.describe(request), tasks));
             Log.info(name(), "Job " + jobId + " accepted: " + job.describe(request)
@@ -181,7 +182,7 @@ public class JobManager {
                         ts.assign(w);
                         busy.put(w.getId(), ts);
                         started.add(ts);
-                         node.election().recordAssignment(w.getId()); // raises the coordinator's JAC
+                        node.election().recordAssignment(w.getId()); // raises the coordinator's JAC
                         Log.info(name(), "Assigned task " + ts.id() + " to Worker-" + w.getId()
                                 + (ts.reassignments > 0 ? " (reassigned)" : ""));
                     }
@@ -230,6 +231,7 @@ public class JobManager {
 
     private void onTaskProgress(TaskState ts, int attempt, TaskProgress p) {
         boolean done = false;
+        boolean jobDone = false;
         synchronized (lock) {
             if (!ts.isCurrent(attempt)) {
                 return; // late reply from an attempt that was already reassigned
@@ -251,6 +253,7 @@ public class JobManager {
             JobState js = jobs.get(ts.task.getJobId());
             if (done && js.allTasksDone()) {
                 js.finish();
+                jobDone = true;
                 Log.info(name(), "Job " + js.jobId + " FINISHED: " + js.description + " = " + js.result);
             }
             js.notifyWatchers(selfId());
@@ -258,6 +261,9 @@ public class JobManager {
         if (done) {
             changed();
             kick(); // the worker is free - give it the next task now
+        }
+        if (jobDone) {
+            node.election().jobFinished(); // may end this coordinator's term
         }
     }
 
@@ -397,7 +403,7 @@ public class JobManager {
         }
     }
 
-    private boolean hasUnfinishedJobs() {
+    public boolean hasUnfinishedJobs() {
         synchronized (lock) {
             for (JobState js : jobs.values()) {
                 if (!js.finished) {

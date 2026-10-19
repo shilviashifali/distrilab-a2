@@ -28,12 +28,14 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * ELECTION  - echo algorithm over the unstructured network (same idea as A1, now over gRPC).
  *             Best candidate = lowest JAC (Job Allocation Counter); highest worker ID breaks a tie.
+ * TERMS     - a coordinator accepts jobsPerTerm jobs (A1: 5); when they have all finished it hands
+ *             over by starting a new election. Each election produces a higher term number and
+ *             anything carrying an older term is ignored.
  * DETECTION - every worker pings the coordinator each interval. A node that answers pings is
  *             alive (even if busy = slow). {@code missedLimit} misses in a row = FAILED.
  *             The Bootstrap Node's own health check is a second, independent detector.
  * RECOVERY  - the coordinator copies its job state (ClusterState) to every worker after each
  *             change. The new coordinator restores the newest copy and carries on.
- * TERMS     - each election produces a higher term number. Anything carrying an older term is ignored.
  */
 public class ElectionManager {
 
@@ -42,6 +44,7 @@ public class ElectionManager {
     private final int electionTimeoutMs;  // election calls wait for a whole branch of the network
     private final int missedLimit;
     private final long electionDelayMs;   // how long with no coordinator before electing
+    private final int jobsPerTerm;        // jobs per coordinator term (0 = never rotate)
 
     // ---- election state ----
     private final AtomicInteger jac = new AtomicInteger(0);   // Job Allocation Counter
@@ -52,6 +55,8 @@ public class ElectionManager {
     private final Set<String> processedElections = ConcurrentHashMap.newKeySet();
     private final Set<String> processedCoordinators = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean electing = new AtomicBoolean(false);
+    private final AtomicInteger termJobs = new AtomicInteger(0);          // jobs accepted this term
+    private final AtomicBoolean termEnding = new AtomicBoolean(false);    // hand-over already started
 
     // ---- failure detection state ----
     private int missedCoordinatorPings = 0;
@@ -64,11 +69,13 @@ public class ElectionManager {
     private final AtomicBoolean replicatePending = new AtomicBoolean(false);
     private final ExecutorService replicator = Executors.newSingleThreadExecutor(daemon("replicator"));
     private final ExecutorService flooder = Executors.newCachedThreadPool(daemon("coordinator-flood"));
+    private final ExecutorService termElection = Executors.newSingleThreadExecutor(daemon("term-election"));
 
-    public ElectionManager(WorkerNode node, int missedLimit, int electionDelaySeconds, int timeoutMs) {
+    public ElectionManager(WorkerNode node, int missedLimit, int electionDelaySeconds, int jobsPerTerm, int timeoutMs) {
         this.node = node;
         this.missedLimit = missedLimit;
         this.electionDelayMs = electionDelaySeconds * 1000L;
+        this.jobsPerTerm = jobsPerTerm;
         this.timeoutMs = timeoutMs;
         this.electionTimeoutMs = Math.max(timeoutMs * 4, 5000);
     }
@@ -96,7 +103,8 @@ public class ElectionManager {
     public String status() {
         String who = coordinatorId == -1 ? "unknown (no coordinator)"
                 : "Worker-" + coordinatorId + (isCoordinator() ? " (me)" : "");
-        return "Coordinator: " + who + " | term " + term.get() + " | my JAC " + jac.get();
+        return "Coordinator: " + who + " | term " + term.get() + " | my JAC " + jac.get()
+                + (isCoordinator() ? " | term jobs " + termJobs.get() + "/" + (jobsPerTerm > 0 ? String.valueOf(jobsPerTerm) : "unlimited") : "");
     }
 
     /** JAC goes up each time this coordinator hands a task to ANOTHER worker. */
@@ -104,6 +112,37 @@ public class ElectionManager {
         if (node.self() != null && workerId != node.self().getId()) {
             jac.incrementAndGet();
         }
+    }
+
+    // =====================================================================
+    // Coordinator terms (A1: a coordinator serves jobsPerTerm jobs, then a new election)
+    // =====================================================================
+
+    /** Called for every NEW job. Only the coordinator accepts jobs, and only jobsPerTerm of them per term. */
+    public void reserveJobSlot() {
+        if (!isCoordinator()) {
+            throw new IllegalStateException("Not the coordinator (current coordinator: Worker-" + coordinatorId + ")");
+        }
+        int n = termJobs.incrementAndGet();
+        if (jobsPerTerm > 0 && n > jobsPerTerm) {
+            termJobs.decrementAndGet();
+            throw new IllegalStateException("This coordinator's term of " + jobsPerTerm
+                    + " jobs is over - a new election is starting. Please retry in a few seconds.");
+        }
+    }
+
+    /** Called by the JobManager whenever a job completes. When the term's last job is done, hand over. */
+    public void jobFinished() {
+        if (jobsPerTerm <= 0 || !isCoordinator() || termJobs.get() < jobsPerTerm
+                || node.jobManager().hasUnfinishedJobs()
+                || !termEnding.compareAndSet(false, true)) {
+            return;
+        }
+        Log.info(node.name(), "Term complete (" + jobsPerTerm + " jobs) - starting new election");
+        termElection.execute(() -> {
+            replicate();        // every worker holds the final state before the hand-over
+            startElection();
+        });
     }
 
     // =====================================================================
@@ -305,6 +344,8 @@ public class ElectionManager {
         synchronized (this) {
             coordinator = node.self();
         }
+        termJobs.set(0);          // a new term starts with a fresh job allowance
+        termEnding.set(false);
         Log.info(node.name(), "I am the COORDINATOR (term " + newTerm + ", JAC " + jac.get() + ")");
         try {
             Ack ack = node.bootstrapStub().setCoordinator(CoordinatorUpdate.newBuilder()
@@ -431,6 +472,7 @@ public class ElectionManager {
     public void stop() {
         replicator.shutdownNow();
         flooder.shutdownNow();
+        termElection.shutdownNow();
     }
 
     private static java.util.concurrent.ThreadFactory daemon(String name) {

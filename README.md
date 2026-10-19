@@ -16,6 +16,7 @@ One NetBeans project (same layout as A1). Each program is its own package with a
 |---|---|---|
 | `src/bootstrap` | Bootstrap Node: assigns worker IDs, tracks active workers, removes failed ones, records the coordinator | `bootstrap.BootstrapNode` |
 | `src/worker` | Worker Node: neighbour network, leader election, task execution, coordinator role, failure recovery | `worker.WorkerNode` |
+| `src/jobs` | Job types MAX, PRIMESUM, PRIMECOUNT: split into tasks, compute with real progress, combine results | - |
 | `src/client` | Client GUI: submit jobs, live progress bars, worker-level breakdown | `client.JobClientGUI` |
 | `src/common` | Shared helpers used by all three: `Settings`, `Channels`, `Log`, `Defaults` | - |
 | `proto/distrilab.proto` | The gRPC contract: every message and service | - |
@@ -45,6 +46,9 @@ or in a `distrilab.properties` file in the folder you run from. Command-line val
 | `pingInterval` | all | 2 | Seconds between liveness checks |
 | `missedPings` | all | 3 | Missed checks in a row before a node counts as failed |
 | `rpcTimeoutMs` | all | 2000 | Deadline for short gRPC calls |
+| `tasksPerWorker` | worker | 3 | A job is split into (active workers x this) tasks |
+| `slowAfterSeconds` | worker | 6 | A task with no progress for this long is checked: slow (still answers pings) or failed |
+| `workerThreads` | worker | 4 | Tasks one worker can compute at the same time |
 
 Example `distrilab.properties`:
 ```
@@ -53,32 +57,34 @@ bootstrapPort=50050
 ```
 
 ## 3. Run
-Start each program in its own window, in this order. On Windows, double-click the scripts:
+Start each program separately, in this order.
 
-1. **Bootstrap Node** (one) - `run-bootstrap.bat`
-2. **Workers** (3-10; more can join at any time, even while jobs run) - `run-worker.bat`, once per worker.
+**In NetBeans:** open the class in **Source Packages**, right-click it > **Run File** (Shift+F6).
+Each run is a separate program with its own Output tab; run a class again to start another copy.
+
+1. **Bootstrap Node** (one): `bootstrap/BootstrapNode.java`
+2. **Workers** (3-10; more can join at any time, even while jobs run): `worker/WorkerNode.java`, once per worker.
    The first election starts automatically a few seconds after workers join.
-3. **Clients** (any number - each one is a separate program with its own window) - `run-client.bat`, once per client.
+3. **Clients** (any number, each with its own window): `client/JobClientGUI.java`, once per client.
 
-`run-demo.bat` asks how many workers and clients to start and opens them all.
+To stop a program, click the red stop button on its Output tab.
 
-Equivalent commands (any OS):
+**From a terminal** (after Clean and Build), one terminal per program:
 ```
 java -cp target/distrilab.jar bootstrap.BootstrapNode --port=50050
 java -cp target/distrilab.jar worker.WorkerNode --bootstrapHost=localhost --bootstrapPort=50050
 java -cp target/distrilab.jar client.JobClientGUI --bootstrapHost=localhost --bootstrapPort=50050
 ```
-Extra `--key=value` settings can be added after the script name, e.g. `run-worker.bat --bootstrapHost=192.168.1.10`.
 
 ### Running across several computers
 On each worker computer pass its own LAN address so others can reach it:
 `--host=<this computer's IP> --bootstrapHost=<bootstrap IP>`. Allow the ports through the firewall.
 
 ## 4. Demo: failure tolerance
-- **Worker failure:** submit a large PRIMESUM job (e.g. 1 to 20,000,000), then close a worker window.
+- **Worker failure:** submit a large PRIMESUM job (e.g. 1 to 20,000,000), then stop a worker (red stop button on its Output tab).
   The coordinator detects it, reassigns that worker's unfinished task, and the progress bar keeps going.
 - **New worker mid-job:** start another worker while a job runs; it is used for the next tasks.
-- **Coordinator failure:** close the coordinator's window while a job runs. The workers detect it,
+- **Coordinator failure:** stop the coordinator worker while a job runs. The workers detect it,
   elect a new coordinator, which continues the job from the replicated state. The client reconnects
   automatically and its progress bar resumes.
 
@@ -88,3 +94,4 @@ On each worker computer pass its own LAN address so others can reach it:
 - `n` – show neighbours
 - `w` – show all active workers
 - `q` – leave the network
+- `job PRIMESUM 1 20000000`, `job MAX 4,8,15,16`, `job PRIMECOUNT 2,3,4,5,7` – submit a test job with this worker as coordinator; progress is printed every 10%

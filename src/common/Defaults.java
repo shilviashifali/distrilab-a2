@@ -11,5 +11,9 @@ public final class Defaults {
     public static final int MISSED_PINGS_FOR_FAILURE = 3;
     public static final int RPC_TIMEOUT_MS = 2000;       // deadline for short calls
 
+    public static final int WORKER_THREADS = 4;          // tasks a worker can compute at the same time
+    public static final int TASKS_PER_WORKER = 3;        // a job is split into (active workers x this) tasks
+    public static final int SLOW_AFTER_SECONDS = 6;      // no progress for this long -> check if slow or failed
+
     private Defaults() {}
 }

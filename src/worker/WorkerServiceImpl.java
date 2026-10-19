@@ -2,6 +2,8 @@ package worker;
 
 import grpc.Ack;
 import grpc.Empty;
+import grpc.Task;
+import grpc.TaskProgress;
 import grpc.WorkerId;
 import grpc.WorkerInfo;
 import grpc.WorkerList;
@@ -10,19 +12,20 @@ import io.grpc.stub.StreamObserver;
 
 /**
  * gRPC endpoint every worker exposes.
- * Network methods (Person 1) are here. ExecuteTask (Person 3) and
- * ReplicateState (Person 2) are added as overrides in the marked section;
- * until then gRPC answers them with UNIMPLEMENTED.
+ * ReplicateState (Person 2) is added as an override in the marked section;
+ * until then gRPC answers it with UNIMPLEMENTED.
  */
 public class WorkerServiceImpl extends WorkerServiceGrpc.WorkerServiceImplBase {
 
     private final NeighbourManager neighbours;
+    private final TaskWorker taskWorker;
 
-    public WorkerServiceImpl(NeighbourManager neighbours) {
+    public WorkerServiceImpl(NeighbourManager neighbours, TaskWorker taskWorker) {
         this.neighbours = neighbours;
+        this.taskWorker = taskWorker;
     }
 
-    // ---------------- Network (Person 1) ----------------
+    // ---------------- Network ----------------
 
     @Override
     public void ping(Empty req, StreamObserver<Ack> out) {
@@ -50,7 +53,12 @@ public class WorkerServiceImpl extends WorkerServiceGrpc.WorkerServiceImplBase {
         out.onCompleted();
     }
 
-    // ---------------- Jobs (Person 3): override executeTask(Task, StreamObserver<TaskProgress>) here ----------------
+    // ---------------- Tasks ----------------
+
+    @Override
+    public void executeTask(Task req, StreamObserver<TaskProgress> out) {
+        taskWorker.execute(req, out);
+    }
 
     // ---------------- Replication (Person 2): override replicateState(ClusterState, StreamObserver<Ack>) here ----------------
 }

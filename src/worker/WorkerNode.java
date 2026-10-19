@@ -6,6 +6,8 @@ import common.Log;
 import common.Settings;
 import grpc.BootstrapServiceGrpc;
 import grpc.Empty;
+import grpc.JobRequest;
+import grpc.JobType;
 import grpc.RegisterRequest;
 import grpc.WorkerId;
 import grpc.WorkerInfo;
@@ -21,10 +23,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * A worker node: starts its gRPC server, registers with the Bootstrap Node,
- * joins the unstructured network, and keeps its neighbours healthy.
+ * joins the unstructured network, keeps its neighbours healthy, computes tasks,
+ * and (as coordinator) distributes jobs.
  *
- * Usage: java -jar worker-node.jar [--bootstrapHost=localhost] [--bootstrapPort=50050]
- *                                  [--host=localhost] [--port=0 (any free port)]
+ * Usage: WorkerNode [--bootstrapHost=localhost] [--bootstrapPort=50050]
+ *                   [--host=localhost] [--port=0 (any free port)]
  */
 public class WorkerNode {
 
@@ -37,6 +40,8 @@ public class WorkerNode {
     private final Channels channels = new Channels();
     private final BootstrapServiceGrpc.BootstrapServiceBlockingStub bootstrap;
     private final NeighbourManager neighbours;
+    private final TaskWorker taskWorker;
+    private final JobManager jobManager;
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
     private final AtomicBoolean left = new AtomicBoolean(false);
 
@@ -56,6 +61,10 @@ public class WorkerNode {
                 s.getInt("neighbours", Defaults.NEIGHBOURS),
                 s.getInt("missedPings", Defaults.MISSED_PINGS_FOR_FAILURE),
                 timeoutMs);
+        this.taskWorker = new TaskWorker(this, s.getInt("workerThreads", Defaults.WORKER_THREADS));
+        this.jobManager = new JobManager(this,
+                s.getInt("tasksPerWorker", Defaults.TASKS_PER_WORKER),
+                s.getInt("slowAfterSeconds", Defaults.SLOW_AFTER_SECONDS));
     }
 
     // ------------------------------------------------------------------
@@ -65,9 +74,9 @@ public class WorkerNode {
     /** Starts the server first (so the Bootstrap can ping us), then registers and joins the network. */
     public void start() throws IOException {
         server = ServerBuilder.forPort(requestedPort)
-                .addService(new WorkerServiceImpl(neighbours))
+                .addService(new WorkerServiceImpl(neighbours, taskWorker))
+                .addService(new JobServiceImpl(jobManager, this))
                 // Person 2: .addService(new ElectionServiceImpl(...))
-                // Person 3: .addService(new JobServiceImpl(...))
                 .build()
                 .start();
         try {
@@ -83,6 +92,7 @@ public class WorkerNode {
         neighbours.start(self);
         neighbours.connectToRandom();
         scheduler.scheduleAtFixedRate(neighbours::check, pingInterval, pingInterval, TimeUnit.SECONDS);
+        jobManager.start();
         // Person 2: schedule the coordinator check / election start here
     }
 
@@ -91,6 +101,8 @@ public class WorkerNode {
             return;
         }
         scheduler.shutdownNow();
+        jobManager.stop();
+        taskWorker.shutdown();
         neighbours.leave();
         try {
             bootstrapStub().unregister(WorkerId.newBuilder().setId(self.getId()).build());
@@ -114,6 +126,10 @@ public class WorkerNode {
         return neighbours;
     }
 
+    public JobManager jobManager() {
+        return jobManager;
+    }
+
     public Channels channels() {
         return channels;
     }
@@ -131,11 +147,19 @@ public class WorkerNode {
     // Console
     // ------------------------------------------------------------------
 
+    private static final String JOB_USAGE = "Usage: job PRIMESUM 1 20000000 | job MAX 4,8,15,16 | job PRIMECOUNT 2,3,4,5,7";
+
     private void consoleLoop() {
-        Log.info(name(), "Commands: n = neighbours, w = all workers, q = quit");
+        Log.info(name(), "Commands: n = neighbours, w = all workers, q = quit, job ... = submit a test job");
+        Log.info(name(), JOB_USAGE);
         Scanner in = new Scanner(System.in);
         while (in.hasNextLine()) {
-            switch (in.nextLine().trim().toLowerCase()) {
+            String line = in.nextLine().trim();
+            if (line.toLowerCase().startsWith("job ")) {
+                submitFromConsole(line.substring(4).trim());
+                continue;
+            }
+            switch (line.toLowerCase()) {
                 case "n" -> Log.info(name(), "Neighbours: " + neighbours.ids());
                 case "w" -> showAllWorkers();
                 case "q" -> {
@@ -145,6 +169,29 @@ public class WorkerNode {
                 // Person 2: "e" (start election) and "s" (coordinator, term, JAC)
                 default -> { }
             }
+        }
+    }
+
+    /** Test helper until the client GUI exists: this worker acts as coordinator for the job. */
+    private void submitFromConsole(String args) {
+        try {
+            String[] parts = args.split("\\s+", 2);
+            JobType type = JobType.valueOf(parts[0].toUpperCase());
+            JobRequest.Builder request = JobRequest.newBuilder().setClientId("console-" + self.getId()).setType(type);
+            if (type == JobType.PRIMESUM) {
+                String[] range = parts[1].trim().split("[\\s,]+");
+                request.setStart(Long.parseLong(range[0])).setEnd(Long.parseLong(range[1]));
+            } else {
+                for (String n : parts[1].split(",")) {
+                    if (!n.isBlank()) {
+                        request.addNumbers(Long.parseLong(n.trim()));
+                    }
+                }
+            }
+            String jobId = jobManager.submit(request.build());
+            jobManager.watch(jobId, new ConsoleProgress(name()));
+        } catch (IllegalArgumentException | ArrayIndexOutOfBoundsException e) {
+            Log.error(name(), "Invalid job (" + e.getMessage() + "). " + JOB_USAGE);
         }
     }
 

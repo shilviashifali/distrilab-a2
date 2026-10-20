@@ -87,6 +87,33 @@ On each worker computer pass its own LAN address so others can reach it:
 - **Coordinator failure:** stop the coordinator worker while a job runs. The workers detect it,
   elect a new coordinator, which continues the job from the replicated state. The client reconnects
   automatically and its progress bar resumes.
+  ## 5. Real-Time Job Progress Monitoring
+
+The Client GUI (`client.JobClientGUI`) allows users to submit distributed jobs and monitor their execution through **gRPC server streaming**.
+
+- **Job submission:** The client submits jobs to the coordinator using `submitJob()`.
+- **Progress streaming:** The `watchProgress()` method receives continuous `JobProgress` updates through `watchJob()`.
+- **Overall progress:** Displays the job completion percentage using a progress bar.
+- **Worker-level progress:** Shows individual task progress, assigned worker IDs, and execution status.
+- **Final results:** Displays the computation result once all tasks are completed.
+- **Coordinator reconnection:** If the connection is interrupted, the client attempts to locate the current coordinator through the Bootstrap Node and reconnect to the existing job-progress stream.
+
+### Implementation
+
+| Class | Function |
+|---|---|
+| `client.JobClientGUI` | Job submission, real-time progress display, and coordinator reconnection |
+| `worker.JobManager` | Task scheduling, progress calculation, and streaming updates |
+| `worker.TaskWorker` | Task execution and intermediate progress reporting |
+
+### Testing
+
+The real-time progress monitoring functionality was successfully tested using a PRIMESUM job.
+
+- **Input:** `1,2000000`
+- **Final result:** `142913828922`
+- **Status:** Completed successfully (100%)
+- **Observation:** The GUI displayed intermediate progress updates, individual task information, and the final computation result.
 
 ## Worker console commands
 - `e` – start a leader election

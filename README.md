@@ -10,26 +10,26 @@ Protocol Buffers**. The system tolerates worker and coordinator failures.
 - Internet access on the first build (Maven downloads gRPC, Protobuf and `protoc`)
 
 ## Project structure
-One NetBeans project (same layout as A1). Each program is its own package with a `main` class:
+One repository and one build, with a **separate project for each program** (Maven multi-module):
 
-| Folder / package | Program / role | Main class |
+| Project (folder) | What it is | Main class / output |
 |---|---|---|
-| `src/bootstrap` | Bootstrap Node: assigns worker IDs, tracks active workers, removes failed ones, records the coordinator | `bootstrap.BootstrapNode` |
-| `src/worker` | Worker Node: neighbour network, leader election, task execution, coordinator role, failure recovery | `worker.WorkerNode` |
-| `src/jobs` | Job types MAX, PRIMESUM, PRIMECOUNT: split into tasks, compute with real progress, combine results | - |
-| `src/client` | Client GUI: one progress bar per job, click a bar for the worker breakdown, CSV input, log | `client.JobClientGUI` |
-| `src/common` | Shared helpers used by all three: `Settings`, `Channels`, `Log`, `Defaults` | - |
-| `proto/distrilab.proto` | The gRPC contract: every message and service | - |
+| `common/` | Shared library: the gRPC contract `proto/distrilab.proto` and helpers `Settings`, `Channels`, `Log`, `Defaults` | library |
+| `bootstrap/` | **Bootstrap Node**: assigns worker IDs, tracks active workers, removes failed ones, records the coordinator | `bootstrap.BootstrapNode` / `bootstrap/target/bootstrap.jar` |
+| `worker/` | **Worker Node**: neighbour network, leader election, task execution (`jobs` package: MAX, PRIMESUM, PRIMECOUNT), coordinator role, failure recovery | `worker.WorkerNode` / `worker/target/worker.jar` |
+| `client/` | **Client GUI**: one progress bar per job, click a bar for the worker breakdown, CSV input, log | `client.JobClientGUI` / `client/target/client.jar` |
+| `pom.xml` | Parent project that builds the four together | - |
 
-The project is built with Maven because gRPC is an external library: Maven downloads it and
-generates the Java classes for the proto (package `grpc`) into `target/generated-sources`.
-Generated code is not committed.
+The three programs depend only on `common`, never on each other, so the proto is defined once and shared.
+Maven generates the Java classes for the proto (package `grpc`) into `common/target/generated-sources`;
+generated code is not committed.
 
 ## 1. Build
-In NetBeans: **File > Open Project** > select this folder > right-click the project > **Clean and Build**.
-(Or from a terminal: `mvn clean package`.)
+In NetBeans: **File > Open Project** > select this folder, tick **Open Required Projects** > **Open Project**.
+This opens the parent and the four projects. Right-click **DistriLab** (the parent) > **Clean and Build**.
+(Or from a terminal: `mvn clean install`.)
 
-This produces one runnable jar: `target/distrilab.jar`.
+This produces one runnable jar per program: `bootstrap/target/bootstrap.jar`, `worker/target/worker.jar`, `client/target/client.jar`.
 
 ## 2. Configure
 Nothing is hard-coded. Every setting can be given as `--key=value` on the command line,
@@ -58,21 +58,21 @@ bootstrapPort=50050
 ## 3. Run
 Start each program separately, in this order.
 
-**In NetBeans:** open the class in **Source Packages**, right-click it > **Run File** (Shift+F6).
+**In NetBeans:** in the program's project, open the class in **Source Packages**, right-click > **Run File** (Shift+F6).
 Each run is a separate program with its own Output tab; run a class again to start another copy.
 
-1. **Bootstrap Node** (one): `bootstrap/BootstrapNode.java`
-2. **Workers** (3-10; more can join at any time, even while jobs run): `worker/WorkerNode.java`, once per worker.
+1. **Bootstrap Node** (one): project *DistriLab Bootstrap Node* > `bootstrap/BootstrapNode.java`
+2. **Workers** (3-10; more can join at any time, even while jobs run): project *DistriLab Worker Node* > `worker/WorkerNode.java`, once per worker.
    The first election starts automatically a few seconds after workers join.
-3. **Clients** (any number, each with its own window): `client/JobClientGUI.java`, once per client.
+3. **Clients** (any number, each with its own window): project *DistriLab Client* > `client/JobClientGUI.java`, once per client.
 
 To stop a program, click the red stop button on its Output tab.
 
-**From a terminal** (after Clean and Build), one terminal per program:
+**From a terminal** (after building), one terminal per program:
 ```
-java -cp target/distrilab.jar bootstrap.BootstrapNode --port=50050
-java -cp target/distrilab.jar worker.WorkerNode --bootstrapHost=localhost --bootstrapPort=50050
-java -cp target/distrilab.jar client.JobClientGUI --bootstrapHost=localhost --bootstrapPort=50050
+java -jar bootstrap/target/bootstrap.jar --port=50050
+java -jar worker/target/worker.jar --bootstrapHost=localhost --bootstrapPort=50050
+java -jar client/target/client.jar --bootstrapHost=localhost --bootstrapPort=50050
 ```
 
 ### Running across several computers

@@ -378,6 +378,7 @@ public class JobManager {
                         ts.status = TaskStatus.DONE;
                         ts.result = tr.getResult();
                         ts.itemsDone = ts.itemsTotal;
+                        ts.worker = WorkerInfo.newBuilder().setId(tr.getWorkerId()).build();
                     }
                 }
                 if (js.allTasksDone()) {

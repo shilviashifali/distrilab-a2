@@ -20,7 +20,6 @@ One NetBeans project (same layout as A1). Each program is its own package with a
 | `src/client` | Client GUI: submit jobs, live progress bars, worker-level breakdown | `client.JobClientGUI` |
 | `src/common` | Shared helpers used by all three: `Settings`, `Channels`, `Log`, `Defaults` | - |
 | `proto/distrilab.proto` | The gRPC contract: every message and service | - |
-| `demo-data/` | Sample CSV inputs for the client | - |
 
 The project is built with Maven because gRPC is an external library: Maven downloads it and
 generates the Java classes for the proto (package `grpc`) into `target/generated-sources`.

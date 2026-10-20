@@ -17,7 +17,7 @@ One NetBeans project (same layout as A1). Each program is its own package with a
 | `src/bootstrap` | Bootstrap Node: assigns worker IDs, tracks active workers, removes failed ones, records the coordinator | `bootstrap.BootstrapNode` |
 | `src/worker` | Worker Node: neighbour network, leader election, task execution, coordinator role, failure recovery | `worker.WorkerNode` |
 | `src/jobs` | Job types MAX, PRIMESUM, PRIMECOUNT: split into tasks, compute with real progress, combine results | - |
-| `src/client` | Client GUI: submit jobs, live progress bars, worker-level breakdown | `client.JobClientGUI` |
+| `src/client` | Client GUI: one progress bar per job, click a bar for the worker breakdown, CSV input, log | `client.JobClientGUI` |
 | `src/common` | Shared helpers used by all three: `Settings`, `Channels`, `Log`, `Defaults` | - |
 | `proto/distrilab.proto` | The gRPC contract: every message and service | - |
 
@@ -86,33 +86,27 @@ On each worker computer pass its own LAN address so others can reach it:
 - **Coordinator failure:** stop the coordinator worker while a job runs. The workers detect it,
   elect a new coordinator, which continues the job from the replicated state. The client reconnects
   automatically and its progress bar resumes.
-  ## 5. Real-Time Job Progress Monitoring
+## 5. Client and Real-Time Job Progress
 
-The Client GUI (`client.JobClientGUI`) allows users to submit distributed jobs and monitor their execution through **gRPC server streaming**.
+The client (`client.JobClientGUI`) submits jobs to the coordinator and follows each one through the
+**WatchJob gRPC server stream**. Run it once per client; every window gets its own client ID.
 
-- **Job submission:** The client submits jobs to the coordinator using `submitJob()`.
-- **Progress streaming:** The `watchProgress()` method receives continuous `JobProgress` updates through `watchJob()`.
-- **Overall progress:** Displays the job completion percentage using a progress bar.
-- **Worker-level progress:** Shows individual task progress, assigned worker IDs, and execution status.
-- **Final results:** Displays the computation result once all tasks are completed.
-- **Coordinator reconnection:** If the connection is interrupted, the client attempts to locate the current coordinator through the Bootstrap Node and reconnect to the existing job-progress stream.
+- **Any number of jobs:** each submitted job gets its own row with its own progress bar.
+- **Real progress:** the percentage comes from completed work reported by the workers, not a timer.
+- **Worker breakdown:** click a job's progress bar to open a live table of its tasks - which worker runs each one,
+  its status (RUNNING, SLOW, REASSIGNED, WAITING, DONE) and items done.
+- **Failover:** if the coordinator fails, the client asks the Bootstrap Node for the new coordinator and calls
+  WatchJob again; while an election or a term change is in progress, submission is retried automatically.
+  Each job has a client-generated UUID, so a retried submission is never run twice.
+- **Input:** type numbers or a range, or use **Load CSV**; invalid input is reported in a dialog.
+- **Log:** timestamped events for every job, with a **Clear Log** button.
+- **Configuration:** `--bootstrapHost` / `--bootstrapPort` (or `distrilab.properties`), default `localhost:50050`.
 
-### Implementation
-
-| Class | Function |
+| Class | Responsibility |
 |---|---|
-| `client.JobClientGUI` | Job submission, real-time progress display, and coordinator reconnection |
-| `worker.JobManager` | Task scheduling, progress calculation, and streaming updates |
-| `worker.TaskWorker` | Task execution and intermediate progress reporting |
-
-### Testing
-
-The real-time progress monitoring functionality was successfully tested using a PRIMESUM job.
-
-- **Input:** `1,2000000`
-- **Final result:** `142913828922`
-- **Status:** Completed successfully (100%)
-- **Observation:** The GUI displayed intermediate progress updates, individual task information, and the final computation result.
+| `client.JobClientGUI` | Window, input and CSV loading, log, connections to Bootstrap and coordinator |
+| `client.JobPanel` | One job: submit with retry, follow the progress stream, reconnect after coordinator failure |
+| `client.BreakdownDialog` | Worker-level breakdown table for one job |
 
 ## Worker console commands
 - `e` – start a leader election

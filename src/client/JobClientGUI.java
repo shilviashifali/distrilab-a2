@@ -1,505 +1,398 @@
-
 package client;
 
+import common.Channels;
 import common.Defaults;
+import common.Log;
+import common.Settings;
 import grpc.BootstrapServiceGrpc;
 import grpc.CoordinatorReply;
 import grpc.Empty;
-import grpc.JobAccepted;
-import grpc.JobProgress;
-import grpc.JobRef;
 import grpc.JobRequest;
 import grpc.JobServiceGrpc;
 import grpc.JobType;
 import grpc.WorkerInfo;
-import grpc.WorkerProgress;
-import io.grpc.ManagedChannel;
-import io.grpc.ManagedChannelBuilder;
-import io.grpc.Status;
-import io.grpc.StatusRuntimeException;
-
 import java.awt.BorderLayout;
+import java.awt.Color;
 import java.awt.Dimension;
-import java.awt.GridLayout;
+import java.awt.FlowLayout;
+import java.awt.Font;
+import java.awt.GridBagConstraints;
+import java.awt.GridBagLayout;
+import java.awt.Insets;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.text.NumberFormat;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
-import javax.swing.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import javax.swing.BorderFactory;
+import javax.swing.Box;
+import javax.swing.BoxLayout;
+import javax.swing.JButton;
+import javax.swing.JComboBox;
+import javax.swing.JFileChooser;
+import javax.swing.JFrame;
+import javax.swing.JLabel;
+import javax.swing.JOptionPane;
+import javax.swing.JPanel;
+import javax.swing.JScrollPane;
+import javax.swing.JSplitPane;
+import javax.swing.JTextArea;
+import javax.swing.JTextField;
+import javax.swing.SwingUtilities;
+import javax.swing.UIManager;
+import javax.swing.UnsupportedLookAndFeelException;
 
+/**
+ * DistriLab client. Any number of jobs can be submitted; each gets its own row with a
+ * live progress bar fed by the WatchJob gRPC stream. Clicking a progress bar opens the
+ * worker-level breakdown for that job. Run this program several times for several clients.
+ *
+ * Usage: JobClientGUI [--bootstrapHost=localhost] [--bootstrapPort=50050]
+ */
 public class JobClientGUI extends JFrame {
 
-    private JComboBox<String> jobType;
-    private JTextField inputField;
-    private JButton submitButton;
-    private JProgressBar progressBar;
-    private JTextArea workerDetails;
-    private JLabel statusLabel;
+    private static final long serialVersionUID = 1L;
 
-    private volatile boolean closed = false;
-    private volatile long generation = 0;
+    static final Color GREEN = new Color(0x2E7D32);
+    static final Color ORANGE = new Color(0xE65100);
+    static final Color RED = new Color(0xC62828);
+    static final Color GREY = new Color(0x616161);
+    private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm:ss");
 
-    public JobClientGUI() {
-        setTitle("DistriLab - Distributed Job Monitor");
-        setSize(750, 550);
-        setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
-        setLocationRelativeTo(null);
+    private final String clientId = "client-" + UUID.randomUUID().toString().substring(0, 6);
+    private final String bootstrapHost;
+    private final int bootstrapPort;
+    private final int timeoutMs;
+    private final transient Channels channels = new Channels();
 
-        JPanel mainPanel = new JPanel(
-                new BorderLayout(15, 15));
-        mainPanel.setBorder(
-                BorderFactory.createEmptyBorder(20, 20, 20, 20));
+    private final JComboBox<String> typeBox = new JComboBox<>(new String[]{"PRIMESUM", "MAX", "PRIMECOUNT"});
+    private final JTextField inputField = new JTextField(32);
+    private final JLabel hintLabel = new JLabel();
+    private final JPanel jobsList = new JPanel();
+    private final JLabel emptyLabel = new JLabel("No jobs yet. Submit one above.");
+    private final JTextArea logArea = new JTextArea();
+    private final AtomicInteger jobCounter = new AtomicInteger();
 
-        JPanel inputPanel = new JPanel(
-                new GridLayout(3, 2, 10, 10));
+    public JobClientGUI(Settings settings) {
+        super("DistriLab Client");
+        this.bootstrapHost = settings.get("bootstrapHost", Defaults.BOOTSTRAP_HOST);
+        this.bootstrapPort = settings.getInt("bootstrapPort", Defaults.BOOTSTRAP_PORT);
+        this.timeoutMs = settings.getInt("rpcTimeoutMs", Defaults.RPC_TIMEOUT_MS);
 
-        jobType = new JComboBox<>(
-                new String[]{"MAX", "PRIMESUM", "PRIMECOUNT"});
-
-        inputField = new JTextField();
-        submitButton = new JButton("Submit Job");
-
-        inputPanel.add(new JLabel("Job Type:"));
-        inputPanel.add(jobType);
-        inputPanel.add(new JLabel("Numbers / Range:"));
-        inputPanel.add(inputField);
-        inputPanel.add(new JLabel(""));
-        inputPanel.add(submitButton);
-
-        progressBar = new JProgressBar(0, 100);
-        progressBar.setValue(0);
-        progressBar.setStringPainted(true);
-        progressBar.setPreferredSize(new Dimension(600, 25));
-
-        statusLabel = new JLabel("Status: Waiting for job");
-
-        JPanel progressPanel = new JPanel(
-                new BorderLayout(5, 5));
-
-        progressPanel.add(
-                new JLabel("Overall Job Progress:"),
-                BorderLayout.NORTH);
-        progressPanel.add(
-                progressBar, BorderLayout.CENTER);
-        progressPanel.add(
-                statusLabel, BorderLayout.SOUTH);
-
-        workerDetails = new JTextArea();
-        workerDetails.setEditable(false);
-        workerDetails.setFont(
-                new java.awt.Font("Monospaced",
-                        java.awt.Font.PLAIN, 12));
-        workerDetails.setText(
-                "Worker progress will appear here.");
-        workerDetails.setLineWrap(true);
-        workerDetails.setWrapStyleWord(true);
-
-        JScrollPane scrollPane =
-                new JScrollPane(workerDetails);
-        scrollPane.setBorder(
-                BorderFactory.createTitledBorder(
-                        "Worker Details"));
-
-        JPanel centerPanel = new JPanel(
-                new BorderLayout(10, 10));
-        centerPanel.add(
-                progressPanel, BorderLayout.NORTH);
-        centerPanel.add(
-                scrollPane, BorderLayout.CENTER);
-
-        mainPanel.add(inputPanel, BorderLayout.NORTH);
-        mainPanel.add(centerPanel, BorderLayout.CENTER);
-        add(mainPanel);
-
-        submitButton.addActionListener(e -> submitJob());
-    }
-
-    private void updateUI(long run, Runnable action) {
-        SwingUtilities.invokeLater(() -> {
-            if (!closed && generation == run) {
-                action.run();
+        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosing(WindowEvent e) {
+                channels.closeAll();
             }
         });
+
+        JPanel root = new JPanel(new BorderLayout(0, 10));
+        root.setBorder(BorderFactory.createEmptyBorder(12, 14, 12, 14));
+        root.add(buildHeader(), BorderLayout.NORTH);
+
+        JSplitPane split = new JSplitPane(JSplitPane.VERTICAL_SPLIT, buildJobsPanel(), buildLogPanel());
+        split.setResizeWeight(0.65);
+        split.setBorder(null);
+
+        JPanel center = new JPanel(new BorderLayout(0, 10));
+        center.add(buildForm(), BorderLayout.NORTH);
+        center.add(split, BorderLayout.CENTER);
+        root.add(center, BorderLayout.CENTER);
+
+        setContentPane(root);
+        setSize(900, 680);
+        setMinimumSize(new Dimension(760, 520));
+        setLocationRelativeTo(null);
+        updateHint();
+        log("Client " + clientId + " started. Bootstrap at " + bootstrapHost + ":" + bootstrapPort);
     }
 
-    private ManagedChannel connect(WorkerInfo worker) {
-        return ManagedChannelBuilder
-                .forAddress(worker.getHost(), worker.getPort())
-                .usePlaintext()
-                .build();
+    // =====================================================================
+    // Layout
+    // =====================================================================
+
+    private JPanel buildHeader() {
+        JLabel title = new JLabel("DistriLab Client");
+        title.setFont(title.getFont().deriveFont(Font.BOLD, 20f));
+        JLabel info = new JLabel("Client ID: " + clientId + "     Bootstrap: " + bootstrapHost + ":" + bootstrapPort);
+        info.setForeground(GREY);
+        JPanel header = new JPanel();
+        header.setLayout(new BoxLayout(header, BoxLayout.Y_AXIS));
+        header.add(title);
+        header.add(Box.createVerticalStrut(2));
+        header.add(info);
+        return header;
     }
 
-    private CoordinatorReply findCoordinator(
-            ManagedChannel bootstrap) {
+    private JPanel buildForm() {
+        JPanel form = new JPanel(new GridBagLayout());
+        form.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createTitledBorder("New job"),
+                BorderFactory.createEmptyBorder(4, 8, 8, 8)));
+        GridBagConstraints c = new GridBagConstraints();
+        c.insets = new Insets(4, 4, 4, 4);
+        c.anchor = GridBagConstraints.WEST;
 
-        return BootstrapServiceGrpc
-                .newBlockingStub(bootstrap)
-                .withDeadlineAfter(
-                        Defaults.RPC_TIMEOUT_MS,
-                        TimeUnit.MILLISECONDS)
-                .getCoordinator(Empty.getDefaultInstance());
+        c.gridx = 0;
+        c.gridy = 0;
+        form.add(new JLabel("Job type"), c);
+        c.gridx = 1;
+        typeBox.addActionListener(e -> updateHint());
+        form.add(typeBox, c);
+
+        c.gridx = 0;
+        c.gridy = 1;
+        form.add(new JLabel("Input"), c);
+        c.gridx = 1;
+        c.weightx = 1;
+        c.fill = GridBagConstraints.HORIZONTAL;
+        inputField.addActionListener(e -> onSubmit()); // Enter submits
+        form.add(inputField, c);
+
+        c.gridx = 1;
+        c.gridy = 2;
+        c.insets = new Insets(0, 6, 4, 4);
+        hintLabel.setForeground(GREY);
+        hintLabel.setFont(hintLabel.getFont().deriveFont(Font.ITALIC));
+        form.add(hintLabel, c);
+
+        JButton loadCsv = new JButton("Load CSV...");
+        loadCsv.addActionListener(e -> onLoadCsv());
+        JButton submit = new JButton("Submit Job");
+        submit.setFont(submit.getFont().deriveFont(Font.BOLD));
+        submit.addActionListener(e -> onSubmit());
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+        buttons.add(loadCsv);
+        buttons.add(submit);
+
+        c.gridx = 1;
+        c.gridy = 3;
+        c.insets = new Insets(4, 4, 0, 4);
+        form.add(buttons, c);
+        return form;
     }
 
-    private void submitJob() {
-        final JobRequest request;
+    private JPanel buildJobsPanel() {
+        jobsList.setLayout(new BoxLayout(jobsList, BoxLayout.Y_AXIS));
+        emptyLabel.setForeground(GREY);
+        emptyLabel.setBorder(BorderFactory.createEmptyBorder(12, 10, 12, 10));
+        jobsList.add(emptyLabel);
 
+        JPanel wrapper = new JPanel(new BorderLayout());
+        wrapper.add(jobsList, BorderLayout.NORTH); // rows stay at the top
+        JScrollPane scroll = new JScrollPane(wrapper);
+        scroll.setBorder(null);
+        scroll.getVerticalScrollBar().setUnitIncrement(16);
+
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.setBorder(BorderFactory.createTitledBorder("Jobs  (click a progress bar to see the worker breakdown)"));
+        panel.add(scroll, BorderLayout.CENTER);
+        panel.setPreferredSize(new Dimension(100, 300));
+        return panel;
+    }
+
+    private JPanel buildLogPanel() {
+        logArea.setEditable(false);
+        logArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        JButton clear = new JButton("Clear Log");
+        clear.addActionListener(e -> logArea.setText(""));
+        JPanel top = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+        top.add(clear);
+
+        JPanel panel = new JPanel(new BorderLayout(0, 4));
+        panel.setBorder(BorderFactory.createTitledBorder("Log"));
+        panel.add(top, BorderLayout.NORTH);
+        panel.add(new JScrollPane(logArea), BorderLayout.CENTER);
+        return panel;
+    }
+
+    private void updateHint() {
+        boolean range = "PRIMESUM".equals(typeBox.getSelectedItem());
+        hintLabel.setText(range
+                ? "Range as start,end   e.g. 1,100000000"
+                : "Comma-separated whole numbers   e.g. 4,8,15,16,23,42");
+    }
+
+    // =====================================================================
+    // Actions
+    // =====================================================================
+
+    private void onSubmit() {
+        JobRequest request;
+        String description;
         try {
-            String input = inputField.getText().trim();
-
-            JobType type = JobType.valueOf(
-                    jobType.getSelectedItem().toString());
-
-            JobRequest.Builder builder =
-                    JobRequest.newBuilder()
-                            .setJobId(UUID.randomUUID().toString())
-                            .setClientId("GUI-Client")
-                            .setType(type);
-
+            JobType type = JobType.valueOf((String) typeBox.getSelectedItem());
+            JobRequest.Builder b = JobRequest.newBuilder()
+                    .setJobId(UUID.randomUUID().toString())   // same ID on every retry = safe resubmission
+                    .setClientId(clientId)
+                    .setType(type);
+            String text = inputField.getText().trim();
             if (type == JobType.PRIMESUM) {
-                String[] range = input.split(",", -1);
-
-                if (range.length != 2) {
-                    throw new IllegalArgumentException(
-                            "Enter range as start,end");
+                String[] parts = text.split("[,\\s]+");
+                if (parts.length != 2 || parts[0].isEmpty()) {
+                    throw new IllegalArgumentException("Enter the range as start,end (for example 1,100000000).");
                 }
-
-                long start =
-                        Long.parseLong(range[0].trim());
-                long end =
-                        Long.parseLong(range[1].trim());
-
+                long start = parseNumber(parts[0]);
+                long end = parseNumber(parts[1]);
                 if (start > end) {
-                    throw new IllegalArgumentException(
-                            "Start must not exceed end");
+                    throw new IllegalArgumentException("Start must be less than or equal to end.");
                 }
-
-                builder.setStart(start);
-                builder.setEnd(end);
-
+                b.setStart(start).setEnd(end);
+                description = "PRIMESUM(" + fmt(start) + ", " + fmt(end) + ")";
             } else {
-                if (input.isEmpty()) {
-                    throw new IllegalArgumentException(
-                            "Enter comma-separated numbers");
+                List<Long> numbers = new ArrayList<>();
+                for (String part : text.split(",")) {
+                    if (!part.isBlank()) {
+                        numbers.add(parseNumber(part));
+                    }
                 }
-
-                for (String number : input.split(",", -1)) {
-                    builder.addNumbers(
-                            Long.parseLong(number.trim()));
+                if (numbers.isEmpty()) {
+                    throw new IllegalArgumentException("Enter at least one number, separated by commas.");
                 }
+                b.addAllNumbers(numbers);
+                description = type + " of " + fmt(numbers.size()) + " numbers";
             }
-
-            request = builder.build();
-
-        } catch (IllegalArgumentException ex) {
-            JOptionPane.showMessageDialog(
-                    this,
-                    "Invalid input: " + ex.getMessage(),
-                    "Input Error",
-                    JOptionPane.ERROR_MESSAGE);
+            request = b.build();
+        } catch (IllegalArgumentException e) {
+            JOptionPane.showMessageDialog(this, e.getMessage(), "Invalid input", JOptionPane.WARNING_MESSAGE);
             return;
         }
 
-        final long run = ++generation;
-
-        submitButton.setEnabled(false);
-        progressBar.setValue(0);
-        workerDetails.setText("");
-        statusLabel.setText(
-                "Status: Connecting to coordinator...");
-
-        Thread thread = new Thread(() ->
-                submitAndWatch(request, run),
-                "job-submit-watch");
-
-        thread.setDaemon(true);
-        thread.start();
+        int number = jobCounter.incrementAndGet();
+        JobPanel row = new JobPanel(this, number, request, description);
+        jobsList.remove(emptyLabel);
+        jobsList.add(row, 0); // newest job at the top
+        jobsList.revalidate();
+        jobsList.repaint();
+        log("[Job " + number + "] Submitting " + description);
+        row.start();
     }
 
-    private void submitAndWatch(
-            JobRequest request, long run) {
-
-        ManagedChannel bootstrap = null;
-        ManagedChannel coordinatorChannel = null;
-
-        try {
-            bootstrap = ManagedChannelBuilder
-                    .forAddress(
-                            Defaults.BOOTSTRAP_HOST,
-                            Defaults.BOOTSTRAP_PORT)
-                    .usePlaintext()
-                    .build();
-
-            CoordinatorReply reply =
-                    findCoordinator(bootstrap);
-
-            if (!reply.getFound()) {
-                throw new IllegalStateException(
-                        "No coordinator available. "
-                        + "Wait for leader election.");
-            }
-
-            coordinatorChannel =
-                    connect(reply.getCoordinator());
-
-            long submittedAt = System.nanoTime();
-
-            JobAccepted accepted =
-                    JobServiceGrpc
-                            .newBlockingStub(coordinatorChannel)
-                            .withDeadlineAfter(
-                                    Defaults.RPC_TIMEOUT_MS,
-                                    TimeUnit.MILLISECONDS)
-                            .submitJob(request);
-
-            String jobId = accepted.getJobId();
-
-            System.out.printf(
-                    "[GUI] Job accepted: %s "
-                    + "(submit RPC %.1f ms)%n",
-                    jobId,
-                    (System.nanoTime() - submittedAt)
-                    / 1_000_000.0);
-
-            updateUI(run, () -> {
-                statusLabel.setText(
-                        "Status: Job accepted. Watching progress...");
-                workerDetails.setText(
-                        "Job accepted successfully!\n\n"
-                        + "Job ID: " + jobId
-                        + "\nJob Type: " + request.getType()
-                        + "\nCoordinator: Worker-"
-                        + accepted.getCoordinatorId()
-                        + "\n\nWaiting for live updates...");
-            });
-
-            coordinatorChannel.shutdown();
-            coordinatorChannel = null;
-
-            watchProgress(bootstrap, jobId, run);
-
-        } catch (Exception ex) {
-            updateUI(run, () -> {
-                statusLabel.setText(
-                        "Status: Submission failed");
-                workerDetails.setText(
-                        "Submission error:\n"
-                        + ex.getMessage());
-
-                JOptionPane.showMessageDialog(
-                        this,
-                        ex.getMessage(),
-                        "Connection Error",
-                        JOptionPane.ERROR_MESSAGE);
-            });
-
-        } finally {
-            if (coordinatorChannel != null) {
-                coordinatorChannel.shutdownNow();
-            }
-            if (bootstrap != null) {
-                bootstrap.shutdownNow();
-            }
-            updateUI(run, () ->
-                    submitButton.setEnabled(true));
+    /** Reads whole numbers from a CSV file (commas and/or new lines); non-numbers such as headers are skipped. */
+    private void onLoadCsv() {
+        JFileChooser chooser = new JFileChooser(new File("."));
+        if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) {
+            return;
         }
-    }
-
-    private void watchProgress(
-            ManagedChannel bootstrap,
-            String jobId,
-            long run) throws InterruptedException {
-
-        int attempts = 0;
-        final int maxAttempts = 20;
-        final int retryDelayMs = 1500;
-
-        while (!closed && generation == run
-                && attempts < maxAttempts) {
-
-            ManagedChannel channel = null;
-
-            try {
-                CoordinatorReply reply =
-                        findCoordinator(bootstrap);
-
-                if (!reply.getFound()) {
-                    throw new IllegalStateException(
-                            "Election in progress");
-                }
-
-                WorkerInfo coordinator =
-                        reply.getCoordinator();
-
-                channel = connect(coordinator);
-
-                final int coordinatorId = coordinator.getId();
-
-                updateUI(run, () ->
-                        statusLabel.setText(
-                                "Status: Streaming from Worker-"
-                                + coordinatorId));
-
-                JobRef ref = JobRef.newBuilder()
-                        .setJobId(jobId)
-                        .build();
-
-                JobServiceGrpc.JobServiceBlockingStub stub =
-                        JobServiceGrpc.newBlockingStub(channel);
-
-                java.util.Iterator<JobProgress> stream =
-                        stub.watchJob(ref);
-
-                boolean receivedUpdate = false;
-
-                long watchStartedAt = System.nanoTime();
-
-                System.out.printf(
-                        "[GUI] Watching job %s on Worker-%d%n",
-                        jobId, coordinatorId);
-
-                while (!closed && generation == run
-                        && stream.hasNext()) {
-
-                    JobProgress progress = stream.next();
-
-                    System.out.printf(
-                            "[GUI] Update after %.1f ms: "
-                            + "%.2f%%, finished=%s, tasks=%d%n",
-                            (System.nanoTime() - watchStartedAt)
-                            / 1_000_000.0,
-                            progress.getPercent(),
-                            progress.getFinished(),
-                            progress.getWorkersCount());
-
-                    receivedUpdate = true;
-                    attempts = 0;
-
-                    updateUI(run, () ->
-                            displayProgress(progress));
-
-                    if (progress.getFinished()) {
-                        return;
+        File file = chooser.getSelectedFile();
+        try {
+            List<String> numbers = new ArrayList<>();
+            int skipped = 0;
+            for (String line : Files.readAllLines(file.toPath())) {
+                for (String part : line.split(",")) {
+                    String value = part.replace("﻿", "").trim(); // Excel byte-order mark
+                    if (value.isEmpty()) {
+                        continue;
+                    }
+                    try {
+                        Long.parseLong(value);
+                        numbers.add(value);
+                    } catch (NumberFormatException e) {
+                        skipped++;
                     }
                 }
-
-                if (receivedUpdate) {
-                    updateUI(run, () ->
-                            statusLabel.setText(
-                                    "Status: Stream ended. Reconnecting..."));
-                }
-
-            } catch (StatusRuntimeException ex) {
-                Status.Code code = ex.getStatus().getCode();
-
-                updateUI(run, () ->
-                        statusLabel.setText(
-                                "Status: Stream interrupted ("
-                                + code + "). Reconnecting..."));
-
-            } catch (RuntimeException ex) {
-                updateUI(run, () ->
-                        statusLabel.setText(
-                                "Status: Waiting for coordinator..."));
-
-            } finally {
-                if (channel != null) {
-                    channel.shutdownNow();
-                }
             }
-
-            attempts++;
-            Thread.sleep(retryDelayMs);
-        }
-
-        if (!closed && generation == run) {
-            updateUI(run, () -> {
-                statusLabel.setText(
-                        "Status: Progress connection unavailable");
-                workerDetails.append(
-                        "\n\nUnable to reconnect after "
-                        + maxAttempts + " attempts."
-                        + "\nCheck coordinator and worker logs.");
-            });
+            if (numbers.isEmpty()) {
+                log("No numbers found in " + file.getName());
+                return;
+            }
+            boolean range = "PRIMESUM".equals(typeBox.getSelectedItem());
+            if (range && numbers.size() < 2) {
+                log("For PRIMESUM the CSV must contain a start and an end value.");
+                return;
+            }
+            inputField.setText(range ? numbers.get(0) + "," + numbers.get(1) : String.join(",", numbers));
+            log("Loaded " + (range ? "range " + numbers.get(0) + " to " + numbers.get(1) : numbers.size() + " numbers")
+                    + " from " + file.getName() + (skipped > 0 ? " (skipped " + skipped + " non-numeric values)" : ""));
+        } catch (IOException e) {
+            log("Could not read " + file.getName() + ": " + e.getMessage());
         }
     }
 
-    private void displayProgress(JobProgress progress) {
-        int percent = (int) Math.max(
-                0, Math.min(100,
-                        Math.round(progress.getPercent())));
-
-        progressBar.setValue(percent);
-
-        StringBuilder details = new StringBuilder();
-
-        details.append("Job ID: ")
-                .append(progress.getJobId())
-                .append("\nCoordinator: Worker-")
-                .append(progress.getCoordinatorId())
-                .append("\nOverall Progress: ")
-                .append(String.format("%.1f",
-                        progress.getPercent()))
-                .append("%\n\n");
-
-        details.append("INDIVIDUAL WORKER PROGRESS\n");
-        details.append("--------------------------\n");
-
-        for (WorkerProgress worker :
-                progress.getWorkersList()) {
-
-            long done = worker.getItemsDone();
-            long total = worker.getItemsTotal();
-
-            double workerPercent =
-                    total > 0
-                    ? (done * 100.0 / total)
-                    : 0;
-
-            details.append("Worker-")
-                    .append(worker.getWorkerId())
-                    .append("\nTask: ")
-                    .append(worker.getTaskId())
-                    .append("\nStatus: ")
-                    .append(worker.getStatus())
-                    .append("\nItems: ")
-                    .append(done)
-                    .append(" / ")
-                    .append(total)
-                    .append("\nProgress: ")
-                    .append(String.format("%.1f",
-                            workerPercent))
-                    .append("%\n\n");
+    private static long parseNumber(String text) {
+        try {
+            return Long.parseLong(text.trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("'" + abbreviate(text.trim()) + "' is not a valid whole number.\n"
+                    + "Numbers must be between " + fmt(Long.MIN_VALUE) + " and " + fmt(Long.MAX_VALUE) + ".");
         }
-
-        if (progress.getFinished()) {
-            progressBar.setValue(100);
-
-            details.append("==========================\n")
-                    .append("JOB COMPLETED\n")
-                    .append("Final Result: ")
-                    .append(progress.getResult())
-                    .append("\n");
-
-            statusLabel.setText(
-                    "Status: Completed successfully");
-
-        } else {
-            statusLabel.setText(
-                    "Status: Processing - "
-                    + percent + "%");
-        }
-
-        workerDetails.setText(details.toString());
-        workerDetails.setCaretPosition(0);
     }
 
-    @Override
-    public void dispose() {
-        closed = true;
-        generation++;
-        super.dispose();
+    private static String abbreviate(String s) {
+        return s.length() > 30 ? s.substring(0, 27) + "..." : s;
     }
+
+    // =====================================================================
+    // Services used by JobPanel
+    // =====================================================================
+
+    /** Asks the Bootstrap Node who the coordinator currently is. */
+    CoordinatorReply findCoordinator() {
+        return BootstrapServiceGrpc.newBlockingStub(channels.get(bootstrapHost, bootstrapPort))
+                .withDeadlineAfter(timeoutMs, TimeUnit.MILLISECONDS)
+                .getCoordinator(Empty.getDefaultInstance());
+    }
+
+    /** Stub for short calls (SubmitJob) to the coordinator, with a deadline. */
+    JobServiceGrpc.JobServiceBlockingStub jobStub(WorkerInfo coordinator) {
+        return JobServiceGrpc.newBlockingStub(channels.get(coordinator.getHost(), coordinator.getPort()))
+                .withDeadlineAfter(timeoutMs, TimeUnit.MILLISECONDS);
+    }
+
+    /** Stub for the long-running WatchJob stream (no deadline). */
+    JobServiceGrpc.JobServiceBlockingStub watchStub(WorkerInfo coordinator) {
+        return JobServiceGrpc.newBlockingStub(channels.get(coordinator.getHost(), coordinator.getPort()));
+    }
+
+    /** Forgets the connection to a coordinator that has failed. */
+    void dropChannel(WorkerInfo coordinator) {
+        channels.close(coordinator.getHost(), coordinator.getPort());
+    }
+
+    /** Adds a timestamped line to the log. Safe to call from any thread. */
+    void log(String message) {
+        String line = "[" + LocalTime.now().format(TIME) + "] " + message + "\n";
+        SwingUtilities.invokeLater(() -> {
+            logArea.append(line);
+            logArea.setCaretPosition(logArea.getDocument().getLength());
+        });
+    }
+
+    static String fmt(long n) {
+        return NumberFormat.getIntegerInstance().format(n);
+    }
+
+    // =====================================================================
+    // Start-up
+    // =====================================================================
 
     public static void main(String[] args) {
-        SwingUtilities.invokeLater(() ->
-                new JobClientGUI().setVisible(true));
+        Settings settings;
+        try {
+            settings = Settings.load(args);
+        } catch (IllegalArgumentException e) {
+            Log.error("Client", e.getMessage());
+            return;
+        }
+        try {
+            for (UIManager.LookAndFeelInfo info : UIManager.getInstalledLookAndFeels()) {
+                if ("Nimbus".equals(info.getName())) {
+                    UIManager.setLookAndFeel(info.getClassName());
+                    break;
+                }
+            }
+        } catch (ReflectiveOperationException | UnsupportedLookAndFeelException e) {
+            // keep the default look and feel
+        }
+        SwingUtilities.invokeLater(() -> new JobClientGUI(settings).setVisible(true));
     }
 }
